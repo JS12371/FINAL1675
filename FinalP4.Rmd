@@ -1,0 +1,279 @@
+---
+title: "Final P4"
+author: "Jonah Smith"
+date: "2025-04-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Part iv: Interpretation – ivA) Input Importance
+• With the model training completed, you can now answer meaningful questions
+associated with the data!
+
+
+• You must identify the best regression model and the best classification model.
+
+BEST REGRESSION MODEL
+  Model: Linear Additive (lin_add) based on cross-validated RMSE, R².
+    Key Variables (from plot_top_t_coefs(lin_add)):
+    Dominant: G, Hue, B – continuous color variables
+    Less significant: categorical (Lightness, Saturation) had moderate influence
+  Interpretation:
+    Green (G) appears most consistently as an important predictor.
+    Hue is significant when modeled with circular transformation.
+    Red (R) showed less predictive power when compared to G, B, Hue.
+    
+BEST CLASSIFICATION MODEL
+  Model: Random Forest (based on highest ROC from CV)
+    Key Variables (from varImp(Random_Forest)):
+    Dominant: Hue, Saturation, G
+    Weaker: R, Lightness, B
+  Interpretation:
+    Similar to regression, Hue, G, and Saturation dominate.
+    Lightness is less consistently important in classification.
+    
+Both models suggest that Hue and Green are consistently strong predictors across regression and classification.
+
+Hue and Green are both highly influential in both models, with Hue gaining strength when modeled correctly as a circular variable in regression.
+
+Red shows up consistently less significant across both regression and classification tasks, even when included in pairwise models.
+
+Though categorical inputs enhance prediction, color inputs alone can meaningfully predict popularity, especially with nonlinear or interaction modeling (e.g. Hue * Saturation, G * Saturation).
+
+Part iv: Interpretation – ivB) Input insights
+• You must drill down further to gain additional insights into the patterns of the
+data!
+• You must identify the combinations of Lightness and Saturation:
+• That appear to be the HARDEST to predict in the regression and classification tasks
+• That appear to be the EASIEST to predict in the regression and classification tasks
+• Base your conclusions on the best performing regression and classification
+models.
+• You should base your conclusions on the resampled HOLD-OUT sets and NOT on
+the TRAINING set!
+• Thus, save your resampled hold-out set predictions!
+33
+
+```{r}
+library(tidyverse)
+library(coefplot)
+library(caret)
+library(rstanarm)
+library(pROC)
+library(broom)
+library(glmnet)
+library(nnet)
+library(tidyr)
+library(bayesplot)
+
+df <- readr::read_csv("paint_project_train_data.csv", col_names = TRUE)
+
+glimpse(df)
+
+
+##dfii will contain the logit transformed response, rather than response
+dfii <- df %>% 
+  mutate(y = boot::logit( (response - 0) / (100 - 0) ) ) %>% 
+  select(R, G, B, 
+         Lightness, Saturation, Hue,
+         y)
+
+dfiii <- df %>%
+  mutate(outcome = factor(outcome)) %>%   # ensure outcome is a factor 0/1
+  select(R, G, B, Hue, Lightness, Saturation, outcome)
+```
+
+```{r}
+lin_add <- readr::read_rds("lin_add.rds")
+rf_clf <- readr::read_rds("rand_forest.rds")
+```
+
+
+```{r}
+library(dplyr)
+
+# 1. Get hold-out set predictions for regression
+reg_pred <- lin_add$pred
+
+# 2. Merge with Lightness/Saturation from original dfii
+reg_pred <- reg_pred %>%
+  left_join(dfii %>% mutate(rowIndex = 1:n()), by = "rowIndex")
+
+# 3. Group by Lightness + Saturation, compute RMSE
+group_rmse <- reg_pred %>%
+  group_by(Lightness, Saturation) %>%
+  summarise(
+    RMSE = sqrt(mean((y - pred)^2)),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(RMSE))
+
+# 4. Show easiest and hardest combinations
+head(group_rmse, 5)   # hardest
+tail(group_rmse, 5)   # easiest
+
+```
+
+
+
+```{r}
+library(dplyr)
+
+# 1. Merge predictions with original metadata
+rf_preds <- rf_clf$pred %>%
+  left_join(
+    dfiii %>% mutate(rowIndex = 1:n()),  # match original rows
+    by = c("rowIndex" = "rowIndex")
+  )
+
+# 2. Compute accuracy per Lightness x Saturation group
+group_acc <- rf_preds %>%
+  group_by(Lightness, Saturation) %>%
+  summarise(
+    Accuracy = mean(pred == obs),
+    N = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(Accuracy)
+
+# 3. Show hardest and easiest to predict combos
+head(group_acc, 5)   # 🚨 Hardest
+tail(group_acc, 5)   # 🟢 Easiest
+
+```
+
+
+Part iv: Interpretation – ivC) Prediction insights
+• You must visualize the trends associated with the HARDEST and EASIEST to predict Lightness and
+Saturation combinations with respect to the TWO most important continuous inputs.
+• Predictions should be made using the best performing models.
+• You must visualize your predictive trends as a SURFACE plot using the following style:
+• The primary continuous input should be used as the x-aesthetic in a graphic.
+• The secondary continuous input should be used the y-aesthetic in the graphic.
+• You must use 101 unique values for both the x and y aesthetics.
+• You must use geom_raster() to create the surface plot.
+• The fill aesthetic of geom_raster() must be set to the LOGIT-transformed response for the regression predictions and
+the EVENT probability for the classification predictions.
+• You must make the surface plot for the hardest to predict Lightness and Saturation combinations
+and again for the easiest to predict Lightness and Saturation combinations .
+• You must decide the reference values to use for the other inputs.
+• Thus you must make 2 surface plots for the best performing regression model and 2 surface plots for the
+best performing classification model.
+34
+
+
+```{r}
+generate_surface_df <- function(model, data, fixed_vals, vars = c("G", "Hue"),
+                                grid_size = 101, type = c("regression", "classification")) {
+  type <- match.arg(type)
+
+  # Create named sequences manually
+  var1_seq <- seq(min(data[[vars[1]]]), max(data[[vars[1]]]), length.out = grid_size)
+  var2_seq <- seq(min(data[[vars[2]]]), max(data[[vars[2]]]), length.out = grid_size)
+
+  # Create grid
+  grid <- expand.grid(
+    var1 = var1_seq,
+    var2 = var2_seq
+  )
+
+  # Rename to match vars
+  names(grid)[1:2] <- vars
+
+  # Add fixed values
+  for (name in names(fixed_vals)) {
+    grid[[name]] <- fixed_vals[[name]]
+  }
+
+  # Predict
+  if (type == "regression") {
+    grid$z <- predict(model, newdata = grid)
+  } else {
+    grid$z <- predict(model, newdata = grid, type = "prob")[, "yes"]
+  }
+
+  return(grid)
+}
+
+```
+
+```{r}
+library(ggplot2)
+
+plot_surface <- function(df, xvar, yvar, title) {
+  ggplot(df, aes_string(x = xvar, y = yvar, fill = "z")) +
+    geom_raster(interpolate = TRUE) +
+    scale_fill_viridis_c() +
+    labs(title = title, x = xvar, y = yvar, fill = "Prediction") +
+    theme_minimal()
+}
+
+```
+
+```{r}
+# For regression
+fixed_reg <- list(
+  Lightness = "pale",  # replace with chosen Lightness
+  Saturation = "gray",  # replace with chosen Saturation
+  R = median(dfii$R),
+  B = median(dfii$B)
+)
+
+# For classification
+fixed_clf <- list(
+  Lightness = "deep",  # replace with chosen Lightness
+  Saturation = "gray",  # replace with chosen Saturation
+  R = median(dfiii$R),
+  B = median(dfiii$B)
+)
+
+```
+
+
+```{r}
+# Regression – hardest combo
+reg_grid_hard <- generate_surface_df(lin_add, dfii, fixed_vals = fixed_reg, type = "regression")
+plot_surface(reg_grid_hard, "G", "Hue", "Regression Surface – Hardest Combo, pale + gray")
+
+# Regression – easiest combo
+fixed_reg$Lightness <- "midtone"    # update based on tail(group_rmse, 1)
+fixed_reg$Saturation <- "subdued"
+reg_grid_easy <- generate_surface_df(lin_add, dfii, fixed_vals = fixed_reg, type = "regression")
+plot_surface(reg_grid_easy, "G", "Hue", "Regression Surface – Easiest Combo, midtone + subdued")
+
+# Classification – hardest combo
+clf_grid_hard <- generate_surface_df(rf_clf, dfiii, fixed_vals = fixed_clf, type = "classification")
+plot_surface(clf_grid_hard, "G", "Hue", "Classification Surface – Hardest Combo")
+
+# Classification – easiest combo
+fixed_clf$Lightness <- "light"
+fixed_clf$Saturation <- "bright"
+clf_grid_easy <- generate_surface_df(rf_clf, dfiii, fixed_vals = fixed_clf, type = "classification")
+plot_surface(clf_grid_easy, "G", "Hue", "Classification Surface – Easiest Combo")
+
+```
+
+
+
+
+Part iv: Interpretation – ivC) Prediction insights
+• What conclusions can draw from your surface plots?
+
+The regression model seems to capture the same thing regardless of its stratification, but with varying levels of significance. Some combos have extremely good fits with useful predictive capabilities, and others are less useful in predictive settings. 
+
+The classification model seems to capture different things depending on its stratification (likely because it is random tree). It seems that surfaces plots that have very clear splits between areas of high pred and low pred are easy to predict, while more homogeneous surfaces are harder to predict. Fundamentally, the harder categories to predict can be explained by the underlying pattern being less significant, and the opposite for the easier categories. 
+
+
+
+
+
+• Are the trends associated with the HARDEST to predict combinations
+different from the trends associated with the EASIEST to prediction
+combinations?
+
+For regression, the overall gradient of the predictions in terms of logit-response is the same, but the values of the harder prediction combo is significantly lower. This means the model will almost never predict a very high value for logit-response, making it less useful as a predictive model. 
+
+The classification model shows structurally different patterns in the classification prediction response between the hard and easy combos. The easy combo has a small area of a high prediction regeion, and a large area of low prediction region. This makes it easy to differentiate between the 1 and 0 outcomes. The hard combo is more homogeneous in the surface, making the difference between 1 and 0 less significant. This makes it harder for the model to know when given new unseen data. 

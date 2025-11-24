@@ -1,0 +1,447 @@
+---
+title: "Final P3"
+author: "Jonah Smith"
+date: "2025-04-18"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(coefplot)
+library(caret)
+library(rstanarm)
+library(pROC)
+library(broom)
+library(glmnet)
+library(nnet)
+library(tidyr)
+library(bayesplot)
+```
+
+```{r}
+## function to be used for feature analysis in the models
+plot_top_t_coefs <- function(model, top_n = 10, title = "Top Predictors by |t-value|") {
+  broom::tidy(model) %>%
+    mutate(t_value = estimate / std.error) %>%
+    arrange(desc(abs(t_value))) %>%
+    slice(1:top_n) %>%
+    ggplot(aes(x = reorder(term, abs(t_value)), y = estimate)) +
+    geom_col(fill = "steelblue") +
+    geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+    coord_flip() +
+    labs(title = title,
+         x = "Predictor",
+         y = "Coefficient Estimate") +
+    theme_minimal()
+}
+```
+
+
+```{r, echo=TRUE}
+# Load your training CSV into df so that df %>% mutate() will work
+df <- read_csv("paint_project_train_data.csv", col_names = TRUE)
+
+# Prepare classification dataset: include only predictors + the binary outcome
+dfiii <- df %>%
+  mutate(outcome = factor(outcome)) %>%   # ensure outcome is a factor 0/1
+  select(R, G, B, Hue, Lightness, Saturation, outcome)
+
+# 1) Intercept‑only
+glm0 <- glm(outcome ~ 1,
+            data   = dfiii,
+            family = binomial)
+
+# 2) Categorical only
+glm_cat <- glm(outcome ~ factor(Lightness) + factor(Saturation),
+               data   = dfiii,
+               family = binomial)
+
+# 3) Continuous only
+glm_cont <- glm(outcome ~ R + G + B + Hue,
+                data   = dfiii,
+                family = binomial)
+
+# 4) All additive
+glm_all <- glm(outcome ~ R + G + B + Hue +
+                        factor(Lightness) + factor(Saturation),
+               data   = dfiii,
+               family = binomial)
+
+# 5) Main‑effects × Categorical interactions
+glm_int <- glm(outcome ~ (R + G + B + Hue) *
+                        (factor(Lightness) + factor(Saturation)),
+               data   = dfiii,
+               family = binomial)
+
+# 6) Pairwise continuous + categories
+glm_pwcat <- glm(outcome ~ (R + G + B + Hue)^2 +
+                           factor(Lightness) + factor(Saturation),
+                 data   = dfiii,
+                 family = binomial)
+
+# 7) Full pairwise × categories
+glm_total <- glm(outcome ~ (R + G + B + Hue)^2 *
+                            (factor(Lightness) + factor(Saturation)),
+                 data   = dfiii,
+                 family = binomial)
+
+#MY MODELS
+#hue and saturation seem to be the most significant factors in the part 1 analysis for classifying outcome, just include them for a simple model
+my_glm_1 <- glm(outcome ~ (Hue) + factor(Saturation),
+                data    = dfiii,
+                family = binomial)
+
+my_glm_2 <- glm(outcome ~ (Hue) * factor(Saturation),
+                data    = dfiii,
+                family = binomial)
+
+##consider the circular approach that I used for the regression model in P2. Since it seemed to capture something interesting, we'll try it again here
+my_glm_3 <- glm(
+  outcome ~ sinpi(Hue/180) + cospi(Hue/180) +
+             factor(Saturation) +
+             sinpi(Hue/180):factor(Saturation) +
+             cospi(Hue/180):factor(Saturation),
+  data   = dfiii,
+  family = binomial
+)
+
+# Summarize all models
+###
+list(
+  intercept_only = summary(glm0),
+  categorical    = summary(glm_cat),
+  continuous     = summary(glm_cont),
+  all_additive   = summary(glm_all),
+  interactions   = summary(glm_int),
+  pairwise_cat   = summary(glm_pwcat),
+  full_model     = summary(glm_total),
+  my_glm_1       = summary(my_glm_1),
+  my_glm_2       = summary(my_glm_2),
+  my_gml_3       = summary(my_glm_3)
+)
+
+#glimpse(dfiii)
+```
+I recieved the warning: glm.fit: fitted probabilities numerically 0 or 1 occurred
+
+This essentially means that the models start to predict so large a probability that it will essentially over or underflow to 0 or 1. I think this is to be expected when we have models with this complexity. 
+
+
+
+```{r}
+# 1) Build a tibble of true labels + predicted probabilities
+prob_df <- tibble(
+  true          = dfiii$outcome,
+  intercept     = predict(glm0,         type = "response"),
+  categorical   = predict(glm_cat,      type = "response"),
+  continuous    = predict(glm_cont,     type = "response"),
+  all_additive  = predict(glm_all,      type = "response"),
+  interactions  = predict(glm_int,      type = "response"),
+  pairwise_cat  = predict(glm_pwcat,    type = "response"),
+  full_model    = predict(glm_total,    type = "response"),
+  my_glm_1      = predict(my_glm_1,     type = "response"),
+  my_glm_2      = predict(my_glm_2,     type = "response"),
+  my_glm_3      = predict(my_glm_3,     type = "response"),
+)
+
+# 2) Compute ROC coordinates for each model
+roc_list <- lapply(names(prob_df)[-1], function(m) {
+  roc_obj   <- roc(prob_df$true, prob_df[[m]])
+  coords_df <- coords(roc_obj, "all",
+                     ret = c("specificity","sensitivity"),
+                     transpose = FALSE)
+  tibble(model       = m,
+         specificity = coords_df$specificity,
+         sensitivity = coords_df$sensitivity)
+})
+
+roc_df <- bind_rows(roc_list) %>%
+  mutate(fpr = 1 - specificity)
+
+# 3) Plot them with ggplot2
+ggplot(roc_df, aes(x = fpr, y = sensitivity, color = model)) +
+  geom_line(size = 1) +
+  geom_abline(linetype = "dashed") +
+  scale_x_continuous("False Positive Rate (1–Specificity)", limits = c(0,1)) +
+  scale_y_continuous("True Positive Rate (Sensitivity)",   limits = c(0,1)) +
+  labs(title = "ROC Curves for Logistic Regression Models",
+       color = "Model") +
+  theme_minimal()
+
+# 4) Rank models by AUC
+model_list <- list(
+  intercept     = glm0,
+  categorical   = glm_cat,
+  continuous    = glm_cont,
+  all_additive  = glm_all,
+  interactions  = glm_int,
+  pairwise_cat  = glm_pwcat,
+  full_model    = glm_total,
+  my_glm_1      = my_glm_1,
+  my_glm_2      = my_glm_2,
+  my_glm_3      = my_glm_3
+)
+
+auc_df <- tibble(
+  model = names(model_list),
+  AUC   = sapply(model_list, function(m) {
+    roc_obj <- roc(dfiii$outcome, predict(m, type="response"))
+    as.numeric(auc(roc_obj))
+  })
+) %>% 
+  arrange(desc(AUC))
+
+print(auc_df)
+
+# 5) Plot top‐10 coefficients (by |z|) for the top 3 models
+plot_top_z_coefs <- function(mod, top_n = 10, title = "") {
+  tidy(mod) %>%
+    mutate(z_value = estimate / std.error) %>%
+    arrange(desc(abs(z_value))) %>%
+    slice(1:top_n) %>%
+    ggplot(aes(x = reorder(term, z_value), y = estimate)) +
+      geom_col(fill = "steelblue") +
+      geom_errorbar(aes(
+        ymin = estimate - std.error, 
+        ymax = estimate + std.error
+      ), width = 0.2) +
+      coord_flip() +
+      labs(
+        title = title,
+        x = "Predictor",
+        y = "Coefficient (log‑odds)"
+      ) +
+      theme_minimal()
+}
+
+top3 <- auc_df$model[1:3]
+
+for (m in top3) {
+  print(plot_top_z_coefs(
+    model_list[[m]], 
+    top_n = 10, 
+    title = paste("Top 10 Coefs by |z| for", m)
+  ))
+}
+```
+The factors seem important here as well (similar to the regression model). Some of the colors seemed to be important in terms of their interactions with other features. The only continuous feature that sits in the top 10 alone is R for any of the models. The key takeaway is that the categorical features are consistently significant in the classification model.
+
+
+I struggled with overfitting of the full model, so the two models I will use for the bayesian approach will be the interaction and the pairwise concatenation.
+```{r}
+color_scheme_set("blue")
+
+# 1) Fit the two Bayesian GLMs
+stan_int <- stan_glm(
+  outcome ~ (R + G + B + Hue) *
+                           (factor(Lightness) + factor(Saturation)),
+  data   = dfiii,
+  family = binomial(link = "logit"),
+  chains = 4, iter = 2000
+)
+
+stan_total <- stan_glm(
+  outcome ~ (R + G + B + Hue)^2 *
+                            (factor(Lightness) + factor(Saturation)),
+  data   = dfiii,
+  family = binomial(link = "logit"),
+  chains = 4, iter = 2000
+)
+
+# 2) Compare AUCs via posterior‐mean probabilities
+post_int  <- posterior_linpred(stan_int,  transform = TRUE)
+post_total <- posterior_linpred(stan_total, transform = TRUE)
+mean_int  <- colMeans(post_int)
+mean_total <- colMeans(post_total)
+
+auc_int  <- auc(dfiii$outcome, mean_int)
+auc_total <- auc(dfiii$outcome, mean_total)
+
+```
+
+```{r}
+auc_int
+auc_total
+```
+
+
+```{r}
+# 1) pull out 95% posterior intervals
+ci_mat <- posterior_interval(stan_int, prob = 0.95)
+
+# 2) keep only those terms whose interval does NOT contain 0
+keep_pars <- rownames(ci_mat)[ ci_mat[,1] > 0 | ci_mat[,2] < 0 ]
+
+# 3) plot densities & CIs for just those "nonzero" coefficients
+mcmc_areas(
+  as.array(stan_int),
+  pars = keep_pars,
+  prob = 0.95
+) +
+  ggtitle("95% Posterior Intervals (Excluding CIs Crossing 0)") +
+  xlab("Log‑odds Coefficient") +
+  ylab("Feature") +
+  theme_minimal()
+
+```
+```{r}
+# 1) pull out 95% posterior intervals
+ci_mat <- posterior_interval(stan_total, prob = 0.95)
+
+# 2) keep only those terms whose interval does NOT contain 0
+keep_pars <- rownames(ci_mat)[ ci_mat[,1] > 0 | ci_mat[,2] < 0 ]
+
+# 3) plot densities & CIs for just those "nonzero" coefficients
+mcmc_areas(
+  as.array(stan_total),
+  pars = keep_pars,
+  prob = 0.95
+) +
+  ggtitle("95% Posterior Intervals (Excluding CIs Crossing 0)") +
+  xlab("Log‑odds Coefficient") +
+  ylab("Feature") +
+  theme_minimal()
+
+```
+
+Despite the total model having a better AUC value, it seems that there is a heavy risk of this not generalizing when we do a cross validation fit. Only one feature is statistically significant. For this reason, I would say that the interactions model is likely going to be the best in terms of predictive capability (despite lower ROC val).
+
+
+```{r}
+# Step 1: Setup prediction grid
+# Fixed values for remaining vars
+ref_vals <- dfiii %>%
+  summarise(across(c(R, G, B, Lightness), median))
+
+# Choose 5 representative saturation levels
+sat_levels <- dfiii %>%
+  distinct(Saturation) %>%
+  arrange(Saturation) %>%
+  pull(Saturation) %>%
+  unique() %>%
+  sort()
+
+# Pick 5 roughly evenly spaced levels
+sat_sample <- sat_levels[round(seq(1, length(sat_levels), length.out = 5))]
+
+# Create prediction grid
+pred_grid <- expand_grid(
+  Hue        = seq(0, 360, length.out = 100),
+  Saturation = sat_sample
+) %>%
+  mutate(
+    R         = ref_vals$R,
+    G         = ref_vals$G,
+    B         = ref_vals$B,
+    Lightness = ref_vals$Lightness
+  )
+
+# Step 2: Predict from both Bayesian models
+post_int_pred  <- posterior_linpred(stan_int,  newdata = pred_grid, transform = TRUE)
+post_total_pred <- posterior_linpred(stan_total, newdata = pred_grid, transform = TRUE)
+
+# Step 3: Summarize into mean & 95% CI
+summarize_preds <- function(mat) {
+  tibble(
+    mean  = colMeans(mat),
+    lower = apply(mat, 2, quantile, 0.025),
+    upper = apply(mat, 2, quantile, 0.975)
+  )
+}
+
+pred_grid_int  <- bind_cols(pred_grid, summarize_preds(post_int_pred))  %>% mutate(model = "stan_int")
+pred_grid_total <- bind_cols(pred_grid, summarize_preds(post_total_pred)) %>% mutate(model = "stan_total")
+
+plot_df <- bind_rows(pred_grid_int, pred_grid_total)
+
+# Step 4: Plot
+ggplot(plot_df, aes(x = Hue, y = mean, color = model, fill = model)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line() +
+  facet_wrap(~ Saturation, nrow = 2) +
+  labs(
+    title = "Predicted Event Probability vs Hue by Saturation",
+    x = "Hue",
+    y = "Predicted Probability",
+    color = "Model",
+    fill  = "Model"
+  ) +
+  theme_minimal()
+
+```
+Though we see a very high range of uncertainty for both models, it appears we are capturing the same underlying trend here. The posterior means are generally very close and follow the same trajectory. 
+
+```{r}
+df_cl <- df %>%
+  mutate(outcome = factor(ifelse(outcome == 1, "yes", "no"))) %>%
+  select(R, G, B, Hue, Lightness, Saturation, outcome)
+
+# 1. Resampling config: 5-fold CV
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  summaryFunction = twoClassSummary,
+  classProbs = TRUE,
+  savePredictions = "final"
+)
+
+metric <- "ROC"  # optimizing ROC AUC
+
+# 2. Helper function to train a model
+train_model <- function(formula, method, tuneLength = 5) {
+  train(
+    formula,
+    data = df_cl,
+    method = method,
+    metric = metric,
+    trControl = ctrl,
+    preProcess = c("center", "scale"),
+    tuneLength = tuneLength
+  )
+}
+
+# 3. Train all models
+models <- list(
+  GLM_Additive  = train_model(outcome ~ R + G + B + Hue + Lightness + Saturation, "glm"),
+  GLM_Interact  = train_model(outcome ~ (R + G + B + Hue)^2 + factor(Lightness) + factor(Saturation), "glm"),
+  GLM_My_2      = train_model(outcome ~ Hue * factor(Saturation), "glm"),
+  GLM_My_3      = train_model(outcome ~ sinpi(Hue/180) + cospi(Hue/180) + factor(Saturation) +
+                                            sinpi(Hue/180):factor(Saturation) +
+                                            cospi(Hue/180):factor(Saturation), "glm"),
+  ElasticNet    = train_model(outcome ~ (R + G + B + Hue)^2 + Lightness + Saturation, "glmnet", tuneLength = 10),
+  Neural_Net    = train_model(outcome ~ ., "nnet", tuneLength = 10),
+  Random_Forest = train_model(outcome ~ ., "rf", tuneLength = 5),
+  Naive_Bayes   = train_model(outcome ~ ., "nb", tuneLength = 5),
+  kNN           = train_model(outcome ~ ., "knn", tuneLength = 10)
+)
+
+# 4. Compare resampled results
+res <- resamples(models)
+```
+
+```{r}
+summary(res, metric = c("ROC", "Sens", "Spec"))
+dotplot(res, metric = "ROC")
+```
+The random forest model is the best model in maximizing the ROC. This was my chosen performance metric, so it is also the best model overall. 
+
+
+SAVING THE BEST MODEL FOR P4
+
+```{r}
+models$Random_Forest %>% readr::write_rds("rand_forest.rds")
+```
+
+```{r}
+rand_forest <- readr::read_rds("rand_forest.rds")
+
+glimpse(rand_forest)
+```
+
+
+
+

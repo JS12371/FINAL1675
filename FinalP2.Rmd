@@ -1,0 +1,686 @@
+---
+title: "FinalP2"
+author: "Jonah Smith"
+date: "2025-04-10"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(coefplot)
+library(rstanarm)
+library(caret)
+
+df <- readr::read_csv("paint_project_train_data.csv", col_names = TRUE)
+
+glimpse(df)
+
+
+##dfii will contain the logit transformed response, rather than response
+dfii <- df %>% 
+  mutate(y = boot::logit( (response - 0) / (100 - 0) ) ) %>% 
+  select(R, G, B, 
+         Lightness, Saturation, Hue,
+         y)
+
+dfii %>% glimpse()
+```
+
+Part ii: Regression - iiA) Linear models Before using more advanced
+methods, you need to develop a baseline understanding for the behavior
+of the LOGIT-transformed response as a function of the inputs using
+linear modeling techniques. Use lm() to fit linear models. You must use
+the following: • Intercept-only model – no INPUTS!
+
+```{r}
+
+##function to be used for feature analysis in the models
+plot_top_t_coefs <- function(model, top_n = 10, title = "Top Predictors by |t-value|") {
+  broom::tidy(model) %>%
+    mutate(t_value = estimate / std.error) %>%
+    arrange(desc(abs(t_value))) %>%
+    slice(1:top_n) %>%
+    ggplot(aes(x = reorder(term, abs(t_value)), y = estimate)) +
+    geom_col(fill = "steelblue") +
+    geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+    coord_flip() +
+    labs(title = title,
+         x = "Predictor",
+         y = "Coefficient Estimate") +
+    theme_minimal()
+}
+
+```
+
+```{r}
+interceptonly = lm(y ~ 1, data = dfii)
+
+interceptonly
+```
+
+```{r}
+# The fitted intercept
+fitted_value <- coef(interceptonly)["(Intercept)"]
+
+# Add an index column for plotting
+dfii <- dfii %>% mutate(Index = 1:nrow(dfii))
+
+# Plot observed y values and the constant fitted line
+ggplot(dfii, aes(x = Index, y = y)) +
+  geom_point(color = "blue", alpha = 0.6) +
+  geom_hline(yintercept = fitted_value, linetype = "dashed", color = "red") +
+  labs(title = "Intercept-Only Model: Observed Values vs Fitted Intercept",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+```
+
+An intercept only model essentially just places the predicted
+logit-response value as the mean of the logit-response across all values
+
+• Categorical variables only – linear additive
+
+```{r}
+cat_model <- lm(y ~ factor(Lightness) + factor(Saturation), data = dfii)
+
+dfii <- dfii %>%
+  mutate(Index = 1:n(),
+         predicted = predict(cat_model))
+
+ggplot(dfii, aes(x = Index)) +
+  geom_point(aes(y = y), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", linetype = "dashed") +
+  labs(title = "Categorical Additive Model: Observed vs. Predicted Logit Response",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+coefplot(cat_model)
+summary(cat_model)
+
+plot_top_t_coefs(cat_model)
+
+```
+
+This model seems to capture some of the behavior of the data (unlike the
+intercept only).
+
+• Continuous variables only – linear additive
+
+```{r}
+cont_model <- lm(y ~ R + G + B + Hue, data = dfii)
+
+
+dfii <- dfii %>%
+  mutate(Index = 1:n(),
+         predicted = predict(cont_model))
+
+ggplot(dfii, aes(x = Index)) +
+  geom_point(aes(y = y), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", linetype = "dashed") +
+  labs(title = "Continuous Additive Model: Observed vs. Predicted Logit Response",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+coefplot(cont_model)
+summary(cont_model)
+plot_top_t_coefs(cont_model)
+```
+
+This model seems to have more granularity than the categorical linear
+additive model. Since index is on the x axis here (just as a general
+idea of observed vs predicted), we can't say anythign about the quality
+of the fit or risk of overfitting.
+
+• All categorical and continuous variables – linear additive
+
+```{r}
+tot_model <- lm(y ~ R + G + B + Hue + factor(Lightness) + factor(Saturation), data = dfii)
+
+dfii <- dfii %>%
+  mutate(Index = 1:n(),
+         predicted = predict(tot_model))
+
+ggplot(dfii, aes(x = Index)) +
+  geom_point(aes(y = y), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", linetype = "dashed") +
+  labs(title = "Total Additive Model: Observed vs. Predicted Logit Response",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+coefplot(tot_model)
+summary(tot_model)
+plot_top_t_coefs(tot_model)
+```
+
+• Interaction of the categorical inputs with all continuous inputs main
+effects
+
+```{r}
+interaction_model <- lm(y ~ (R + G + B + Hue) * (factor(Lightness) + factor(Saturation)), data = dfii)
+
+dfii <- dfii %>%
+  mutate(Index = 1:n(),
+         predicted = predict(interaction_model))
+
+ggplot(dfii, aes(x = Index)) +
+  geom_point(aes(y = y), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", linetype = "dashed") +
+  labs(title = "Total Additive Model: Observed vs. Predicted Logit Response",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+
+coefplot(interaction_model)
+summary(interaction_model)
+plot_top_t_coefs(interaction_model)
+
+```
+
+• Add categorical inputs to all main effect and all pairwise
+interactions of continuous inputs
+
+```{r}
+pairwise_add_model <- lm(y ~ (R + G + B + Hue)^2 + factor(Lightness) + factor(Saturation), data = dfii)
+
+dfii <- dfii %>%
+  mutate(Index = 1:n(),
+         predicted = predict(pairwise_add_model))
+
+ggplot(dfii, aes(x = Index)) +
+  geom_point(aes(y = y), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", linetype = "dashed") +
+  labs(title = "Main effects/pairwise plus Categories Additive Model: Observed vs. Predicted Logit Response",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+
+coefplot(pairwise_add_model)
+summary(pairwise_add_model)
+plot_top_t_coefs(pairwise_add_model)
+```
+
+•Interaction of the categorical inputs with all main effect and all
+pairwise interactions of continuous inputs
+
+```{r}
+total_model <- lm(y ~ (R + G + B + Hue)^2 * (factor(Lightness) + factor(Saturation)), data = dfii)
+
+dfii <- dfii %>%
+  mutate(Index = 1:n(),
+         predicted = predict(total_model))
+
+ggplot(dfii, aes(x = Index)) +
+  geom_point(aes(y = y), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", linetype = "dashed") +
+  labs(title = "Total pairwise model Additive Model: Observed vs. Predicted Logit Response",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+coefplot(total_model)
+summary(total_model)
+plot_top_t_coefs(total_model)
+
+```
+
+```{r}
+##observationally, it seemed that red related to logit response potentially non-linearly (quadratic), and the other colors related linearly
+
+##the saturation level seemed to add strength to the linear relationship, where the lightness level seemed to give clusters (general ranges)
+
+my_model_1 <- lm(y ~ (I(R^2) * I(R)) + G + B + factor(Saturation), data = dfii)
+
+dfii <- dfii %>%
+  mutate(Index = 1:n(),
+         predicted = predict(my_model_1))
+
+ggplot(dfii, aes(x = Index)) +
+  geom_point(aes(y = y), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", linetype = "dashed") +
+  labs(title = "Main effects/pairwise plus Categories Additive Model: Observed vs. Predicted Logit Response",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+coefplot(my_model_1)
+summary(my_model_1)
+plot_top_t_coefs(my_model_1)
+
+```
+
+```{r}
+#I saw particularly strong linear relations between logit response and green values, and I saw linear patterns appear when stratified by saturation, so let's do a model just looking at that
+#Simplicity here could be an advantage of this model, it will not likely suffer from overfitting (still must do other tests to verify still)
+
+my_model_2 <- lm(y ~  G * factor(Saturation), data = dfii)
+
+dfii <- dfii %>%
+  mutate(Index = 1:n(),
+         predicted = predict(my_model_2))
+
+ggplot(dfii, aes(x = Index)) +
+  geom_point(aes(y = y), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", linetype = "dashed") +
+  labs(title = "Main effects/pairwise plus Categories Additive Model: Observed vs. Predicted Logit Response",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+coefplot(my_model_2)
+summary(my_model_2)
+plot_top_t_coefs(my_model_2)
+
+```
+
+```{r}
+## modeling the Hue as a circular feature
+## The Hue variable is inherently circular (0–360 degrees), meaning that 0 and 360 degrees are similar.
+##Linear treatment of Hue doesn't capture its cyclical nature.
+
+my_model_3 <- lm(y ~ sinpi(Hue/180) + cospi(Hue/180) + 
+                   G + B + factor(Saturation) + 
+                   sinpi(Hue/180):factor(Saturation) + 
+                   cospi(Hue/180):factor(Saturation),
+                 data = dfii)
+
+dfii <- dfii %>%
+  mutate(Index = 1:n(),
+         predicted = predict(my_model_2))
+
+ggplot(dfii, aes(x = Index)) +
+  geom_point(aes(y = y), color = "blue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", linetype = "dashed") +
+  labs(title = "Main effects/pairwise plus Categories Additive Model: Observed vs. Predicted Logit Response",
+       x = "Observation Index",
+       y = "Logit-Transformed Response")
+
+coefplot(my_model_3)
+summary(my_model_3)
+plot_top_t_coefs(my_model_3)
+```
+
+```{r}
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2))
+}
+
+mae <- function(actual, predicted) {
+  mean(abs(actual - predicted))
+}
+
+# List of models
+models <- list(
+  intercept_only = interceptonly,
+  categorical    = cat_model,
+  continuous     = cont_model,
+  additive       = tot_model,
+  interaction    = interaction_model,
+  pairwise_add   = pairwise_add_model,
+  total_model    = total_model,
+  my_model_1     = my_model_1,
+  my_model_2     = my_model_2,
+  my_model_3     = my_model_3
+)
+
+# Create empty data frame to store results
+model_scores <- data.frame(Model = character(),
+                           RMSE = numeric(),
+                           R2 = numeric(),
+                           MAE = numeric(),
+                           stringsAsFactors = FALSE)
+
+# Loop through each model and calculate metrics
+for (name in names(models)) {
+  model <- models[[name]]
+  preds <- predict(model, newdata = dfii)
+  actual <- dfii$y
+  
+  model_scores <- bind_rows(model_scores, tibble(
+    Model = name,
+    RMSE = rmse(actual, preds),
+    R2   = summary(model)$r.squared,
+    MAE  = mae(actual, preds)
+  ))
+}
+
+# Rank by RMSE (lower is better)
+model_scores <- model_scores %>% arrange(RMSE)
+
+# Print performance comparison
+print(model_scores)
+
+# Top 3 models
+top_3 <- model_scores %>% slice(1:3) %>% pull(Model)
+
+# Plot top 3 coefficients
+top_plots <- lapply(top_3, function(name) {
+  model <- models[[name]]
+  plot_top_t_coefs(model, top_n = 20, title = paste("Top Coefs -", name))
+})
+
+# Display plots
+top_plots
+```
+
+When looking at the RMSE, R2, and MAE, the unanimous order of the best
+three models are total_model, interaction, and pairwise_add, in that
+order.
+
+Almost universally, the categorical variables seem to play an important role in modeling logit response. While the colors do appear in these top models with significance, they have values that are small and potentially won't contribute to the overall model to the degree that the categorical variables do. We will really see what inputs are relevant when we cross validate and use a bayesian approach. 
+
+
+```{r}
+
+
+# Bayesian Model 1: Best model is interaction. This is because total_model didn't converge, so I will use the next best model in terms of RMSE, R2, and MAE, which is interaction_model.
+bayes_interaction <- stan_glm(
+  formula = y ~ (R + G + B + Hue) * (factor(Lightness) + factor(Saturation)),
+  data = dfii,
+  family = gaussian(),
+  prior = normal(0, 10, autoscale = TRUE),
+  prior_intercept = normal(0, 10, autoscale = TRUE),
+  chains = 4,
+  iter = 2000,
+  seed = 12345
+)
+
+print(summary(bayes_interaction))
+
+```
+
+```{r}
+# Reason for choice of my_model_3:
+# my_model_3 is chosen because it is the only model that attempts to understand hue in a circular manner. If a real relationship exists there, we will be able to understand it well with a bayesian linear model. Most of the other models contain many of the same terms, just including or excluding various terms from total_model, but my_model_3 has features that are unique.
+#------------------------------------------------
+bayes_my3 <- stan_glm(
+  formula = y ~ sinpi(Hue/180) + cospi(Hue/180) + 
+                   G + B + factor(Saturation) + 
+                   sinpi(Hue/180):factor(Saturation) + 
+                   cospi(Hue/180):factor(Saturation),
+  data = dfii,
+  family = gaussian(),
+  prior = normal(0, 10, autoscale = TRUE),
+  prior_intercept = normal(0, 10, autoscale = TRUE),
+  chains = 4,
+  iter = 2000,
+  seed = 54321
+)
+
+# Print a summary of the Bayesian my_model_1
+print(summary(bayes_my3))
+```
+
+```{r}
+
+# Here we use posterior_predict() to extract 1000 draws for each observation,
+# then average over draws to get point predictions.
+pred_interaction <- apply(posterior_predict(bayes_interaction, draws = 1000), 2, mean)
+pred_my3  <- apply(posterior_predict(bayes_my3, draws = 1000), 2, mean)
+
+#----------------------------
+# Define functions to compute performance metrics
+#----------------------------
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2))
+}
+
+mae <- function(actual, predicted) {
+  mean(abs(actual - predicted))
+}
+
+r2 <- function(actual, predicted) {
+  1 - sum((actual - predicted)^2) / sum((actual - mean(actual))^2)
+}
+
+# Compute Metrics for Each Model
+metrics_total <- c(
+  RMSE = rmse(dfii$y, pred_interaction),
+  MAE  = mae(dfii$y, pred_interaction),
+  R2   = r2(dfii$y, pred_interaction)
+)
+
+metrics_my1 <- c(
+  RMSE = rmse(dfii$y, pred_my3),
+  MAE  = mae(dfii$y, pred_my3),
+  R2   = r2(dfii$y, pred_my3)
+)
+
+# Combine the results in a data frame
+metrics_df <- tibble(
+  Model = c("Bayesian Interaction Model", "Bayesian my_model_3"),
+  RMSE  = c(metrics_total["RMSE"], metrics_my1["RMSE"]),
+  MAE   = c(metrics_total["MAE"], metrics_my1["MAE"]),
+  R2    = c(metrics_total["R2"], metrics_my1["R2"])
+)
+
+#----------------------------
+# Display the Table
+#----------------------------
+print(metrics_df)
+
+```
+
+```{r}
+lm_total <- lm(y ~ (R + G + B + Hue) * (factor(Lightness) + factor(Saturation)), data = dfii)
+sigma_mle <- sigma(lm_total)
+cat("Frequentist MLE estimate of sigma from lm():", sigma_mle, "\n")
+
+# 2. Extract Posterior Samples for sigma
+bayes_total_matrix <- as.matrix(bayes_interaction)
+# Extract the column named "sigma" (the residual standard error)
+sigma_samples <- bayes_total_matrix[,"sigma"]
+
+# Check basic summary statistics of sigma posterior.
+sigma_post_summary <- summary(sigma_samples)
+print(sigma_post_summary)
+
+# 3. Create a Density Plot for the Posterior Distribution of sigma
+df_sigma <- data.frame(sigma = sigma_samples)
+
+ggplot(df_sigma, aes(x = sigma)) +
+  geom_density(fill = "skyblue", alpha = 0.5) +
+  geom_vline(xintercept = sigma_mle, color = "red", linetype = "dashed", size = 1) +
+  labs(title = "Posterior Density of Likelihood Noise (σ) for Bayesian Total Model",
+       subtitle = paste("Red dashed line: lm() MLE σ =", round(sigma_mle, 3)),
+       x = expression(sigma),
+       y = "Density")
+
+```
+
+The lm maximum likelihood estimate looks to be at or very close to correspond to the highest density point on the uncertainty plot of sigma. 
+
+I think we have a reasonable certainty of the value of sigma. The large majority of the density plot ranges between the values .054 and .062, which nicely aligns with the MLE estimate and is not a very large range of possible values. 
+
+
+
+```{r}
+mean_G <- mean(dfii$G, na.rm = TRUE)
+mean_B <- mean(dfii$B, na.rm = TRUE)
+mean_Hue <- mean(dfii$Hue, na.rm = TRUE)
+
+# Create a grid of Hue and Saturation values.
+newdata_my3 <- expand.grid(G = seq(0, 360, length.out = 100),
+                           Saturation = sort(unique(dfii$Saturation)))
+newdata_my3 <- newdata_my3 %>%
+  mutate(
+         Hue = mean_Hue,
+         B = mean_B)
+
+# Get the mean prediction and intervals from my_model_3
+pred_conf_my3 <- predict(my_model_3, newdata = newdata_my3, interval = "confidence")
+pred_pred_my3 <- predict(my_model_3, newdata = newdata_my3, interval = "prediction")
+
+# Combine the predictions with newdata_my3
+newdata_my3 <- newdata_my3 %>%
+  mutate(fit_conf = pred_conf_my3[,"fit"],
+         lwr_conf = pred_conf_my3[,"lwr"],
+         upr_conf = pred_conf_my3[,"upr"],
+         fit_pred = pred_pred_my3[,"fit"],
+         lwr_pred = pred_pred_my3[,"lwr"],
+         upr_pred = pred_pred_my3[,"upr"])
+
+#-------------
+# Prepare newdata for interaction_model
+#-------------
+# For interaction_model, predictors include: R, G, B, Hue, and the factors Lightness and Saturation.
+# We choose Hue as primary (varied 0 to 360) and use Lightness for faceting.
+# We fix R, G, and B at their means and set Saturation to a reference level.
+mean_R <- mean(dfii$R, na.rm = TRUE)
+mean_G <- mean(dfii$G, na.rm = TRUE)
+mean_B <- mean(dfii$B, na.rm = TRUE)
+mean_Hue <- mean(dfii$Hue, na.rm = TRUE)
+# Choose a reference level for Saturation (here, the first level)
+ref_Saturation <- sort(unique(dfii$Saturation))[1]
+
+newdata_inter <- expand.grid(G = seq(0, 360, length.out = 100),
+                             Lightness = sort(unique(dfii$Lightness)))
+newdata_inter <- newdata_inter %>%
+  mutate(R = mean_R,
+         Hue = mean_Hue,
+         B = mean_B,
+         Saturation = ref_Saturation)
+
+# Get predictions from interaction_model
+pred_conf_inter <- predict(interaction_model, newdata = newdata_inter, interval = "confidence")
+pred_pred_inter <- predict(interaction_model, newdata = newdata_inter, interval = "prediction")
+
+newdata_inter <- newdata_inter %>%
+  mutate(fit_conf = pred_conf_inter[,"fit"],
+         lwr_conf = pred_conf_inter[,"lwr"],
+         upr_conf = pred_conf_inter[,"upr"],
+         fit_pred = pred_pred_inter[,"fit"],
+         lwr_pred = pred_pred_inter[,"lwr"],
+         upr_pred = pred_pred_inter[,"upr"])
+
+#-------------
+# Plot Predictions for my_model_3
+#-------------
+p_my3 <- ggplot(newdata_my3, aes(x = G, y = fit_conf)) +
+  # Confidence interval ribbon
+  geom_ribbon(aes(ymin = lwr_conf, ymax = upr_conf), fill = "blue", alpha = 0.3) +
+  # Prediction interval ribbon (wider)
+  geom_ribbon(aes(ymin = lwr_pred, ymax = upr_pred), fill = "orange", alpha = 0.2) +
+  geom_line(color = "black", size = .2) +
+  facet_wrap(~ Saturation) +
+  labs(title = "Predictive Trends from my_model_3",
+       subtitle = "X: G; Facet: Saturation\nBlue: 95% Confidence Interval on the Mean\nOrange: 95% Prediction Interval",
+       x = "Hue (degrees)",
+       y = "Logit-Transformed Response")
+
+#-------------
+# Plot Predictions for interaction_model
+#-------------
+p_inter <- ggplot(newdata_inter, aes(x = G, y = fit_conf)) +
+  geom_ribbon(aes(ymin = lwr_conf, ymax = upr_conf), fill = "blue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = lwr_pred, ymax = upr_pred), fill = "orange", alpha = 0.2) +
+  geom_line(color = "black", size = .2) +
+  facet_wrap(~ Lightness) +
+  labs(title = "Predictive Trends from interaction_model",
+       subtitle = "X: G; Facet: Lightness (with Saturation fixed at bright)", ref_Saturation, "')\nBlue: 95% Confidence Interval on the Mean\nOrange: 95% Prediction Interval",
+       x = "Hue (degrees)",
+       y = "Logit-Transformed Response")
+
+
+print(p_my3)
+print(p_inter)
+
+```
+The predictive trends between the two models are capturing the same thing. Despite trying to account for a cyclical relationship between saturation and Hue in my_model_3, the strongest relationship still remained the linear regression with G and logit response (stratified by saturation). Similarly but not exactly the same, the interaction model exhibited an extremely strong relationship between G and logit response when stratified by Lightness. Hue and Saturation did exhibit some interesting sin behavior, but the fit was not strong enough to justify it being a primary feature. 
+
+```{r}
+
+ctrl   <- trainControl(method = "cv", number = 5,
+                       summaryFunction = defaultSummary)  # gives RMSE, Rsquared, MAE
+metric <- "RMSE"                                  
+
+# helper to wrap train() with consistent args
+train_model <- function(form, method, tuneLength=5) {
+  train(form, data      = dfii,
+             method    = method,
+             metric    = metric,
+             trControl = ctrl,
+             preProcess= c("center","scale"),
+             tuneLength= tuneLength,
+              savePredictions = "final")
+}
+
+# 1) Linear additive
+lin_add    <- train_model(y ~ R + G + B + Hue + Lightness + Saturation, "lm")
+
+# 2) Pairwise continuous interactions + categorical
+lin_pair   <- train_model(y ~ (R + G + B + Hue)^2 + Lightness + Saturation, "lm")
+
+# 3) Full interaction model
+lin_inter  <- train_model(y ~ (R + G + B + Hue)*(Lightness + Saturation), "lm")
+
+# 4) Elastic net on pairwise
+en_pair    <- train_model(y ~ (R + G + B + Hue)^2 + Lightness + Saturation, "glmnet", tuneLength=10)
+
+# 5) Elastic net on full interaction
+en_inter   <- train_model(y ~ (R + G + B + Hue)*(Lightness + Saturation), "glmnet", tuneLength=10)
+
+# 6) Neural net
+nn_mod     <- train_model(y ~ R + G + B + Hue + Lightness + Saturation, "nnet", tuneLength=10)
+
+# 7) Random forest
+rf_mod     <- train_model(y ~ R + G + B + Hue + Lightness + Saturation, "rf", tuneLength=5)
+
+# 8) Gradient boosting
+gbm_mod    <- train_model(y ~ R + G + B + Hue + Lightness + Saturation, "xgbTree", tuneLength=5)
+
+# 9) Two extras: SVM radial & k‑NN
+svm_mod    <- train_model(y ~ R + G + B + Hue + Lightness + Saturation, "svmRadial", tuneLength=5)
+knn_mod    <- train_model(y ~ R + G + B + Hue + Lightness + Saturation, "kknn",    tuneLength=5)
+
+# collect results
+models <- list(
+  Linear_Add       = lin_add,
+  Pairwise_Add     = lin_pair,
+  Interaction      = lin_inter,
+  ElasticNet_Pair  = en_pair,
+  ElasticNet_Inter = en_inter,
+  Neural_Net       = nn_mod,
+  Random_Forest    = rf_mod,
+  GBM              = gbm_mod,
+  SVM_Radial       = svm_mod,
+  kNN              = knn_mod
+)
+
+res <- resamples(models)
+
+# Show RMSE & Rsquared
+summary(res, metric = c("RMSE","Rsquared"))
+dotplot(res, metric = metric)
+```
+The linear additive model is the best model when considering RMSE and R2 as performance metrics on a cross validated train/test.
+
+
+SAVING THE MODEL FOR USE IN PART 4
+
+```{r}
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  summaryFunction = defaultSummary,
+  savePredictions = "final" 
+)
+
+lin_add <- train_model(y ~ R + G + B + Hue + Lightness + Saturation,
+  method = "lm")
+
+str(lin_add$pred)
+
+lin_add %>% readr::write_rds("lin_add.rds")
+```
+
+```{r}
+lin_add = readr::read_rds("lin_add.rds")
+
+glimpse(lin_add)
+```
+
+

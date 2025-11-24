@@ -1,0 +1,430 @@
+---
+title: "FinalP1"
+author: "Jonah Smith"
+date: "2025-04-09"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Load Libraries
+
+```{r, load_tidyverse}
+library(tidyverse)
+```
+
+##Read Data
+
+```{r, read_final_data}
+df <- readr::read_csv("paint_project_train_data.csv", col_names = TRUE)
+glimpse(df)
+```
+
+#Part i: Exploration
+
+• Visualize the distributions of variables in the data set.
+
+• Counts for categorical variables.
+
+```{r}
+df %>% ggplot(aes(x = Lightness)) + geom_bar(stat = "count") + labs(title = "Counts of the lightness variable")
+
+df %>% ggplot(aes(x = Saturation)) + geom_bar(stat = "count") + labs(title = "Counts of the saturation variable")
+```
+
+• Histograms or Density plots for continuous variables. Are the
+distributions Gaussian like?
+
+```{r}
+df %>% ggplot(aes(x = R)) + geom_histogram() + labs(title = "Distribution of 'R' (red values in the data)")
+
+df %>% ggplot(aes(x = G)) + geom_histogram() + labs(title = "Distribution of 'G' (green values in the data)")
+
+df %>% ggplot(aes(x = B)) + geom_histogram() + labs(title = "Distribution of 'B' (blue values in the data)")
+
+df %>% ggplot(aes(x = Hue)) + geom_histogram() + labs(title = "Distribution of 'Hue'")
+```
+
+Both the R, G, and B values seemed to be a (noisy) skewed distribution,
+with a heavy left tail. Hue seems to have certain common values (ie
+spikes in the graph), but it looks overall uniform in distribution.
+
+• Condition (group) the continuous variables based on the categorical
+variables.
+
+COLORS
+
+```{r}
+# Histogram of R grouped by Lightness using faceting
+df %>% 
+  ggplot(aes(x = R)) +
+  geom_histogram(bins = 30, fill = "red", color = "white") +
+  facet_wrap(~ Lightness) +
+  labs(title = "Distribution of R by Lightness", x = "R value", y = "Count")
+
+df %>% 
+  ggplot(aes(x = G)) +
+  geom_histogram(bins = 30, fill = "green", color = "white") +
+  facet_wrap(~ Lightness) +
+  labs(title = "Distribution of G by Lightness", x = "G value", y = "Count")
+
+df %>% 
+  ggplot(aes(x = B)) +
+  geom_histogram(bins = 30, fill = "blue", color = "white") +
+  facet_wrap(~ Lightness) +
+  labs(title = "Distribution of B by Lightness", x = "B value", y = "Count")
+
+# Density plot of G grouped by Saturation using faceting
+df %>% 
+  ggplot(aes(x = R)) +
+  geom_density(fill = "tomato", alpha = 0.5) +
+  facet_wrap(~ Saturation) +
+  labs(title = "Density of R by Saturation", x = "R value", y = "Density")
+
+df %>% 
+  ggplot(aes(x = G)) +
+  geom_density(fill = "green", alpha = 0.5) +
+  facet_wrap(~ Saturation) +
+  labs(title = "Density of G by Saturation", x = "G value", y = "Density")
+
+df %>% 
+  ggplot(aes(x = B)) +
+  geom_density(fill = "blue", alpha = 0.5) +
+  facet_wrap(~ Saturation) +
+  labs(title = "Density of B by Saturation", x = "B value", y = "Density")
+```
+
+• Are there differences in continuous variable distributions and
+continuous variable summary statistics based on categorical variable
+values?
+
+STRATIFIED BY LIGHTNESS
+
+-   R stratified by Lightness - Noisy but potentially gaussian - Dark,
+    deep, saturated Clean distributions (looks to be little noise) -
+    light, midtone, pale, soft
+
+-   G stratified by Lightness - potentially gaussian - dark, deep,
+    midtone, saturated, soft light might be gaussian, but contains some
+    outlier values
+
+-   B stratified by Lightness - Noisy but potentially gaussian -
+    midtone, saturated, soft
+
+-   IN AGGREGATE
+
+    -   THE COLORS BY LIGHTNESS SEEM TO HAVE DISTRIBUTIONS THAT WERE
+        PREVIOUSLY NOT SEEN IN AGGREGATE
+
+    -   there are many seemingly gaussian distributions that appear when
+        you group color by lightness level, and this could be useful in
+        making predictions
+
+STRATIFIED BY SATURATION
+
+-   R by Saturation
+
+    -   almost all of the saturation values seem to be normal with an
+        extreme left skew "gray" saturation has more in the middle than
+        expected if it followed a left skew normal dist
+
+-   G by Saturation
+
+    -   similar to R by saturation, most of the distributions seem to
+        have large left tails.
+
+    -   grey seems to be more centered around the mean (\~150) as well
+
+-   B by Saturation
+
+    -   many of these distributions have a bi-modal shape. There is a
+        peak around the \~50-100 region, and then another around the
+        \~200 region.
+
+    -   grey, again, seems to be more centered around the mean
+
+-   IN AGGREGATE
+
+    -   by saturation, each of the colors individually seem to have the
+        most values around the \~200 saturation level. Blue tends to
+        have more values in the lower saturation than either red or
+        green.
+
+HUE GROUPED BY CATEGORICAL
+
+```{r}
+df %>% 
+  ggplot(aes(x = Hue)) +
+  geom_histogram(bins = 30, fill = "black", color = "white") +
+  facet_wrap(~ Lightness) +
+  labs(title = "Distribution of hue by Lightness", x = "hue value", y = "Count")
+
+df %>% 
+  ggplot(aes(x = Hue)) +
+  geom_histogram(bins = 30, fill = "black", color = "white") +
+  facet_wrap(~ Saturation) +
+  labs(title = "Distribution of hue by Saturation", x = "hue value", y = "Count")
+```
+
+-   These values look to be largely uniform distributions with lots of
+    noise. It will be hard to gain predictive insight from hue when
+    stratified by the Lightness or Saturation value.
+
+• Are there differences in continuous variable distributions and
+continuous variable summary statistics based on the binary outcome?
+
+```{r}
+df %>% 
+  ggplot(aes(x = R, fill = as.factor(outcome))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of R by Outcome", x = "R value", y = "Density", fill = "Outcome")
+
+df %>% 
+  ggplot(aes(x = G, fill = as.factor(outcome))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of G by Outcome", x = "G value", y = "Density", fill = "Outcome")
+
+df %>% 
+  ggplot(aes(x = B, fill = as.factor(outcome))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of B by Outcome", x = "B value", y = "Density", fill = "Outcome")
+
+df %>% 
+  ggplot(aes(x = Hue, fill = as.factor(outcome))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of Hue by Outcome", x = "Hue value", y = "Density", fill = "Outcome")
+```
+
+R BY OUTCOME
+
+-   Both the 0 and 1 outcome seem to have a similar distribution, the 0
+    outcomes have a higher density amongst high r values, but the
+    general shape and mode of both distributions are similar.
+
+G BY OUTCOME
+
+-   Low values (50-100) of G have a higher density in the 1 outcome.
+    Values in the (\~100-160) range have the opposite pattern, higher
+    density of 0 than of 1. the upper values seem to be very similar
+    when stratified by outcome.
+
+B BY OUTCOME
+
+-   the shape of these distributions are very similar. Blue distribution
+    with outcome 0 seems to be bi-modal, with a first peak around 80,
+    where outcome 1's stratification seems to be unimodal. both peaks in
+    the high range of B are around 210.
+
+HUE BY OUTCOME
+
+-   this plot seems to be the most interesting of them all. Hue by 0
+    seems to be inversely correlated with hue by 1 outcomes. This means,
+    at least it appears visually, as the density of Hue goes up when
+    looking at just 0 outcomes, the density of the hue with 1 outcomes
+    goes down. Since the two distributions are very different, looking
+    at the relative densities of the two could provide a useful insight
+    in predicting outcome with just a hue value. This can be used as
+    part of a larger model, but it seems to be a promising idea.
+
+• Visualize the relationships between the continuous inputs, are they
+correlated?
+
+```{r}
+df %>% ggplot(aes(x = R, y = G)) + geom_point()
+
+df %>% ggplot(aes(x = R, y = B)) + geom_point()
+
+df %>% ggplot(aes(x = B, y = G)) + geom_point()
+
+df %>% ggplot(aes(x = Hue, y = R)) + geom_point()
+
+df %>% ggplot(aes(x = Hue, y = B)) + geom_point()
+
+df %>% ggplot(aes(x = Hue, y = G)) + geom_point()
+ 
+```
+
+Relationships between continuous variables:\
+
+All color relationships have a strong cluster in the top left (ie when
+one color is of high value it is common for the other color will be of
+high value)
+
+Red and Green: seems to have a certain relationship, but it looks non
+linear. Could be quadratic or of another nature.
+
+Red and Blue: seems to have little to no relationship.
+
+Blue and Green: seems to have a linear relationship.
+
+Hue and the colors do not seem to produce a graph that looks more than
+noise.
+
+• Visualize the relationships between the continuous outputs (response
+and the LOGIT-transformed response, y) with respect to the continuous
+INPUTS.
+
+```{r}
+dfii <- df %>% 
+  mutate(y = boot::logit( (response - 0) / (100 - 0) ) ) %>% 
+  select(R, G, B, 
+         Lightness, Saturation, Hue, response,
+         y)
+
+
+dfii %>% glimpse()
+```
+
+```{r}
+dfii %>% ggplot(aes(x = R, y = response)) + geom_point(color = "red") + labs(title = "R VS RESPONSE")
+dfii %>% ggplot(aes(x = R, y = y)) + geom_point(color = "red") + labs(title = "R VS LOGIT RESPONSE")
+```
+
+Red seems to have a quadratic or other non linear relationship with
+logit response. The relationship seems less obvious when compared with
+non-transformed response.
+
+```{r}
+dfii %>% ggplot(aes(x = R, y = response)) + geom_point(color = "tomato") + facet_wrap(~ Lightness) + labs(title = "R VS RESPONSE BY LIGHTNESS")
+dfii %>% ggplot(aes(x = R, y = y)) + geom_point(color = "tomato") + facet_wrap( ~Lightness) + labs(title = "R VS LOGIT RESPONSE BY LIGHTNESS")
+```
+
+When grouped by lightness, certain lightness levels (light, pale, soft)
+have formed clusters, meaning that for a paint with this lightness
+level, there is a relatively small range that both the response and the
+color will be in.
+
+```{r}
+dfii %>% ggplot(aes(x = R, y = response)) + geom_point(color = "darkred") + facet_wrap(~ Saturation) + labs(title = "R VS RESPONSE BY SATURATION")
+dfii %>% ggplot(aes(x = R, y = y)) + geom_point(color = "darkred") + facet_wrap(~ Saturation) + labs(title = "R VS LOGIT RESPONSE BY SATURATION")
+```
+
+When grouped by saturation, certain saturation levels show a very linear
+relationship between red and logit response (this applies to neutral,
+gray, and shaded). The other satuartion levels seem to fit a sort of
+tilted parabolic shape.
+
+```{r}
+dfii %>% ggplot(aes(x = G, y = response)) + geom_point(color = "green") + labs(title = "G VS RESPONSE")
+dfii %>% ggplot(aes(x = G, y = y)) + geom_point(color = "green") + labs(title = "G VS LOGIT RESPONSE")
+```
+
+Green vs Logit response seems to look like a very strong linear
+relationship.
+
+```{r}
+dfii %>% ggplot(aes(x = G, y = response)) + geom_point(color = "lightgreen") + facet_wrap(~ Lightness) + labs(title = "G VS RESPONSE BY LIGHTNESS")
+dfii %>% ggplot(aes(x = G, y = y)) + geom_point(color = "lightgreen") + facet_wrap(~ Lightness) + labs(title = "G VS LOGIT RESPONSE BY LIGHTNESS")
+```
+
+We can see this partial clustering happening with grouping by lightness
+(as we saw in red as well). The ones that seem to cluster most are
+(pale, light, and soft).
+
+```{r}
+dfii %>% ggplot(aes(x = G, y = response)) + geom_point(color = "darkgreen") + facet_wrap(~ Saturation) + labs(title = "G VS RESPONSE BY SATURATION")
+dfii %>% ggplot(aes(x = G, y = y)) + geom_point(color = "darkgreen") + facet_wrap(~ Saturation) + labs(title = "G VS LOGIT RESPONSE BY SATURATION")
+```
+
+All of the logit responses vs green look extremely linear when
+stratified by saturation. This could be extremely useful in predicting
+logit output. The strongest relationships appear to be neutral, gray,
+shaded, and subdued.
+
+```{r}
+dfii %>% ggplot(aes(x = B, y = response)) + geom_point(color = "steelblue") + labs(title = "B VS RESPONSE")
+dfii %>% ggplot(aes(x = B, y = y)) + geom_point(color = "steelblue") + labs(title = "B VS LOGIT RESPONSE")
+```
+
+Blue seems to follow a linear relationship with logit response, though
+it seems to be relatively weak.
+
+```{r}
+dfii %>% ggplot(aes(x = B, y = response)) + geom_point(color = "lightblue") + facet_wrap(~ Lightness) + labs(title = "G VS RESPONSE BY LIGHTNESS")
+dfii %>% ggplot(aes(x = B, y = y)) + geom_point(color = "lightblue") + facet_wrap(~ Lightness) + labs(title = "G VS LOGIT RESPONSE BY LIGHTNESS")
+```
+
+Again, we can see the clustering when we group by lightness.
+
+```{r}
+dfii %>% ggplot(aes(x = B, y = response)) + geom_point(color = "darkblue") + facet_wrap(~ Saturation) + labs(title = "G VS RESPONSE BY SATURATION")
+dfii %>% ggplot(aes(x = B, y = y)) + geom_point(color = "darkblue") + facet_wrap(~ Saturation) + labs(title = "G VS LOGIT RESPONSE BY SATURATION")
+```
+
+We can also, again, see linear relationships appear when we stratify by
+saturation. The strongest appearance of a linear relationship appear to
+be neutral, gray, shaded, and subdued saturation levels.
+
+```{r}
+dfii %>% ggplot(aes(x = Hue, y = response)) + geom_point(color = "black") + labs(title = "HUE VS RESPONSE")
+dfii %>% ggplot(aes(x = Hue, y = y)) + geom_point(color = "black") + labs(title = "HUE VS LOGIT RESPONSE")
+```
+
+Hue vs. logit response appears to be almost purely noise. There is no
+obvious relationship here.
+
+```{r}
+dfii %>% ggplot(aes(x = Hue, y = response)) + geom_point(color = "black") + facet_wrap(~ Lightness) + labs(title = "HUE VS RESPONSE BY LIGHTNESS")
+dfii %>% ggplot(aes(x = Hue, y = y)) + geom_point(color = "black") + facet_wrap(~ Lightness) + labs(title = "HUE VS LOGIT RESPONSE BY LIGHTNESS")
+```
+
+When stratified by lightness, we can see some almost horizontal ranges
+form. This means that regardless of hue (or any other continuous
+variable), there is a range of logit responses that the lightness level
+will fall under. This suggests that lightness alone, can be useful in
+predicting logit response. Some of the lightness levels (notably dark,
+deep, and saturated), seem to have higher logit responses are closer to
+the middle (\~10-20).
+
+```{r}
+dfii %>% ggplot(aes(x = Hue, y = response)) + geom_point(color = "black") + facet_wrap(~ Saturation) + labs(title = "HUE VS RESPONSE BY SATURATION")
+dfii %>% ggplot(aes(x = Hue, y = y)) + geom_point(color = "black") + facet_wrap(~ Saturation) + labs(title = "HUE VS LOGIT RESPONSE BY SATURATION")
+```
+
+There seems to be little relationship between hue and logit response,
+even when stratified by saturation level.
+
+• Can you identify any clear trends? Do the trends depend on the
+categorical INPUTS?
+
+Many trends appear when we visualise the relationship between the
+continuous variables and the response/logit response. Some stronger
+trends appear when you group by categorical inputs.
+
+• How can you visualize the behavior of the binary outcome with respect
+to the continuous inputs? How can you visualize the behavior of the
+binary outcome with respect to the categorical INPUTS?
+
+The first can be done with a density plot (already done above).
+
+Plotting categorical variables relative to the binary inputs can be done
+with a side-by-side bar chart as follows:
+
+```{r}
+df %>% 
+  ggplot(aes(x = Lightness, fill = as.factor(outcome))) +
+  geom_bar(position = "dodge") +
+  labs(title = "Counts of Outcome by Lightness",
+       x = "Lightness",
+       y = "Count",
+       fill = "Outcome")
+
+df %>% 
+  ggplot(aes(x = Saturation, fill = as.factor(outcome))) +
+  geom_bar(position = "dodge") +
+  labs(title = "Counts of Outcome by Saturation",
+       x = "Saturation",
+       y = "Count",
+       fill = "Outcome")
+
+```
+
+Lightness seems to have a relatively constant ratio of 0 and 1 outcomes
+per each lightness level. However, Saturations eems to have a widely
+varying ratio of 0s to 1s depending on the saturation level. This might
+be useful in predictions.
